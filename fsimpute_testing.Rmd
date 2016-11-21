@@ -1,0 +1,237 @@
+---
+title: "Evaluating the faimpute Method"
+author: "Jeff Neyhart"
+date: "November 16, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+To test the utility of this approach, we will use simulations.
+
+
+Terminology used in this package and markdown:
+
+1. founder(s) - the parents of a family. In the case of a bi-parental population,
+the number of founders is 2
+2. final(s) - the progeny of a cross between the founders. The finals are the
+"observed" progeny. That is, through inbreeding, different generations of progeny
+are created, but presumably only one generation is genotyped. These are the
+"observed" progeny.
+
+
+### De novo Simulations
+
+These are simulations in which the population is created from randomization, not
+from any empirical starting material.
+
+
+```{r}
+
+# Load some packages
+library(fsimpute)
+library(qtl)
+library(stringr)
+library(tidyverse)
+
+```
+
+
+Define the parameters to vary
+
+```{r}
+
+# Size of each family
+fam.size.list <- c(30, 100, 200)
+# Maximum Proportion of missing marker data
+missing.prob.list <- c(0.2, 0.4, 0.6, 0.8)
+# Different generations of selfing
+selfing.gen.list <- c(2, 3, 4, 5, 6)
+
+
+## Non-varying parameters
+# Number of chromosomes
+n.chr <- 2
+# Length of chromosomes
+chr.len <- c(100, 110)
+# Number of markers per chromosome
+n.markers <- 500
+# Number of simulation replications
+n.rep <- 5
+
+# Genetic map
+map <- sim.map(len = chr.len, n.mar = n.markers, include.x = F)
+
+# Calculate the number of experiments
+n.exp <- length(fam.size.list) * length(missing.prob.list) * n.rep
+
+# Build a data.frame for the simulation design
+design <- expand.grid(
+  1:n.rep,
+  missing.prob.list,
+  fam.size.list,
+  selfing.gen.list
+)
+
+
+```
+
+
+#### Test 1 - Filtering on Unambiguous Genotypes
+
+
+```{r}
+
+# Apply a function over the results data.frame
+results.full <- apply(X = design, MARGIN = 1, FUN = function(iter) {
+  
+  # Separate parameters
+  selfing.gen <- as.numeric(iter[4])
+  size <- as.numeric(iter[3])
+  miss <- as.numeric(iter[2])
+  rep <- as.numeric(iter[1])
+
+  # Simulate the family
+  fam.cross <- sim.cross(map = map, n.ind = size, type = "bcsft", 
+                         cross.scheme = c(0, (selfing.gen + 1)))
+  
+  # Generate founder genotypes
+  founders.recode <- lapply(X = map, FUN = function(chr)
+    sapply(X = chr, FUN = function(site) sample(c(0,2), size = 2, replace = T)) )
+  
+  # Extract the progeny genotypes from the cross
+  finals <- lapply(X = fam.cross$geno, FUN = function(chr) chr$data)
+  
+  # Recode the finals to z {0, 1, 2} format
+  finals.recode <- mapply(founders.recode, finals, FUN = function(p.chr, f.chr) {
+      
+      # Iterate over markers
+      new.genos <- sapply(X = seq_len(ncol(p.chr)), FUN = function(i) {
+        # Pull out parental genotypes
+        pars <- p.chr[,i]
+        names(pars) <- c(1,3)
+        
+        # If the parents are the same, the het is the same as the homs
+        if (all(pars[1] == pars)) {
+          het <- pars[1]
+        } else {
+          het <- 1
+        }
+         
+        # Convert the genotypes
+        ifelse(f.chr[,i] == 1, pars["1"], 
+               ifelse(f.chr[,i] == 2, het, 
+                      ifelse(f.chr[,i] == 3, pars["3"], NA))) })
+      
+      colnames(new.genos) <- colnames(p.chr)
+      
+      return(list(new.genos)) })
+  
+  # Combine matricies and simulate missing data
+  missing.recode <- list(founders.recode, finals.recode) %>%
+    pmap(function(fo.chr, fi.chr) {
+      
+      # Combine matrices
+      chr <- rbind(fo.chr, fi.chr)
+      
+      # First generate the missing data proportions from a uniform distribution
+      miss.prob <- runif(n = ncol(chr), min = 0, max = miss)
+      
+      miss.mat <- sapply(X = miss.prob, FUN = function(prob) 
+        sample(x = c(T, F), size = nrow(chr), replace = T, prob = c(prob, 1 - prob)))
+      
+      chr[miss.mat] <- NA
+      
+      fo.chr <- chr[1:2,]
+      fi.chr <- chr[-1:-2,]
+      
+      list(founders = fo.chr, finals = fi.chr) })
+  
+  # Grab the founders and finals matrices
+  founders.missing <- lapply(X = missing.recode, FUN = function(chr) chr$founders)
+  finals.missing <- lapply(X = missing.recode, FUN = function(chr) chr$finals)
+  
+  # Create the cross object
+  new.cross <- prep_cross(map = map, founders = founders.missing, 
+                          finals = finals.missing, selfing.gen = selfing.gen)
+  
+  
+  # Impute
+  impute.cross <- fsimpute(cross = new.cross, prob.threshold = 0.7)
+  
+  
+  # Founder accuracy
+  fi.combined <- do.call("cbind", impute.cross$imputed$founders)
+  f.combined <- do.call("cbind", founders.recode)
+  
+  tab <- table(fi.combined, f.combined, exclude = 1, dnn = list("imputed", "original"))
+  
+  fou_acc <- sum(diag(tab)) / sum(tab)
+  
+  # Finals accuracy
+  fi.combined <- do.call("cbind", impute.cross$imputed$finals)
+  f.combined <- do.call("cbind", finals.recode)
+  
+  tab <- table(fi.combined, f.combined, dnn = list("imputed", "original"))
+  
+  fin_acc <- sum(diag(tab)) / sum(tab)
+  
+  # Missingness
+  fou_miss <- impute.cross$imputed$stats$missingness["founders.missing","mean"]
+  fin_miss <- impute.cross$imputed$stats$missingness["finals.missing","mean"]
+  
+  # Assemble data.frame
+  data.frame(selfing.gen = selfing.gen,
+            fam_size = size,
+             max_miss = miss,
+             rep = rep,
+             fou_acc = fou_acc,
+             fin_acc = fin_acc,
+             fou_miss = fou_miss,
+             fin_miss = fin_miss)  })
+
+results.full <- do.call("rbind", results.full) %>%
+  tbl_df()
+
+
+```
+    
+
+#### Plot
+
+
+```{r}
+
+# Gather the results and summarize
+results.sum <- results.full %>% 
+  gather(param, value, -fam_size:-rep, -selfing.gen) %>%
+  group_by(selfing.gen, fam_size, max_miss, param) %>%
+  summarize(mean = mean(value),
+            sd = sd(value))
+
+# Plot
+# Imputation Accuracy in the Finals
+gp <- results.sum %>%
+  filter(param %in% c("fou_acc", "fin_acc")) %>%
+  filter(selfing.gen == 2) %>%
+  ggplot(mapping = aes(x = max_miss, y = mean, col = as.factor(fam_size))) + 
+  geom_point(size = 2) + 
+  geom_line() +
+  ylab("accuracy")
+gp + facet_grid(. ~ param)
+
+# Remaining missingness
+gp <- results.sum %>%
+  filter(param %in% c("fou_miss", "fin_miss")) %>%
+  ggplot(mapping = aes(x = max_miss, y = mean, col = as.factor(fam_size))) + 
+  geom_point(size = 2) + 
+  geom_line() +
+  ylab("missingness")
+gp + facet_grid(. ~ param)
+
+
+```

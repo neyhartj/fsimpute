@@ -4,24 +4,21 @@
 \alias{fsimpute}
 \title{Impute genotypes in bi-parental populations of finite selfing}
 \usage{
-fsimpute(cross, founders, finals, prob.threshold = 0.7, step = 0,
+fsimpute(cross, prob.threshold = 0.7, type = "discrete", step = 0,
   off.end = 0, error.prob = 1e-04, map.function = c("haldane", "kosambi",
   "c-f", "morgan"), stepwidth = c("fixed", "variable", "max"))
 }
 \arguments{
-\item{cross}{An object of class \code{cross} from the package \code{qtl}. Genotype
-data should only include those of the progeny in the family.}
-
-\item{founders}{A list of founder genotypes, where each element in the list
-is a \code{matrix} of genotypes on a single chromosome. Genotypes should be
-coded as \code{z {0, 1, 2, NA}} where \code{z} is the number of reference alleles.
-Column names should be marker names. This is the observed genotype data.}
-
-\item{finals}{A list of progeny genotypes. The encoding and formatting should
-be identical to the argument \code{founders}.}
+\item{cross}{An object of class \code{cross} from the package
+\code{\link[qtl]{read.cross}}. This object should be generated using the
+function \code{\link[fsimpute]{prep_cross}}.}
 
 \item{prob.threshold}{The minimum conditional genotype probability to declare
 a site as having been inherited from a certain parent.}
+
+\item{type}{The genotype output type. Can be \code{discrete} to code each
+imputed genotype as the most likely genotype, or \code{continuous} to code
+each imputed genotype as a weighted average based on the genotype probabilities.}
 
 \item{step}{See \code{\link[qtl]{calc.genoprob}}.}
 

@@ -7,16 +7,14 @@
 #' genotypes are imputed using the imputed founder genotypes.
 #'
 #'
-#' @param cross An object of class \code{cross} from the package \code{qtl}. Genotype
-#' data should only include those of the progeny in the family.
-#' @param founders A list of founder genotypes, where each element in the list
-#' is a \code{matrix} of genotypes on a single chromosome. Genotypes should be
-#' coded as \code{z {0, 1, 2, NA}} where \code{z} is the number of reference alleles.
-#' Column names should be marker names. This is the observed genotype data.
-#' @param finals A list of progeny genotypes. The encoding and formatting should
-#' be identical to the argument \code{founders}.
+#' @param cross An object of class \code{cross} from the package
+#' \code{\link[qtl]{read.cross}}. This object should be generated using the
+#' function \code{\link[fsimpute]{prep_cross}}.
 #' @param prob.threshold The minimum conditional genotype probability to declare
 #' a site as having been inherited from a certain parent.
+#' @param type The genotype output type. Can be \code{discrete} to code each
+#' imputed genotype as the most likely genotype, or \code{continuous} to code
+#' each imputed genotype as a weighted average based on the genotype probabilities.
 #' @param step See \code{\link[qtl]{calc.genoprob}}.
 #' @param off.end See \code{\link[qtl]{calc.genoprob}}.
 #' @param error.prob See \code{\link[qtl]{calc.genoprob}}.
@@ -34,14 +32,12 @@
 #'
 #'
 #' @import qtl
-#' @import dplyr
-#' @import stringr
+#' @import purrr
 #'
 #' @export
 #'
-fsimpute <- function(cross, founders, finals, prob.threshold = 0.7, step = 0,
-                     off.end = 0, error.prob = 1e-4,
-                     map.function = c("haldane","kosambi","c-f","morgan"),
+fsimpute <- function(cross, prob.threshold = 0.7, type = "discrete", step = 0, off.end = 0,
+                     error.prob = 1e-4, map.function = c("haldane","kosambi","c-f","morgan"),
                      stepwidth=c("fixed", "variable", "max")) {
 
   ## Error handling
@@ -51,52 +47,13 @@ fsimpute <- function(cross, founders, finals, prob.threshold = 0.7, step = 0,
   if (!iscross)
     stop("The argument 'cross' must be an object of class 'cross.'")
 
-  # Check to make sure the finals and founders have the same number of markers
-  founders.dim.check <- sapply(founders, dim)
-  finals.dim.check <- sapply(finals, dim)
-  cross.dim.check <- sapply(cross$geno, function(chr) dim(chr$data))
-
-
-  if(!all.equal(founders.dim.check[2,], finals.dim.check[2,]))
-    stop("The number of markers in each chromosome is not the same between
-         the 'founders' and 'finals' arguments.")
-
-  # Make sure founders has only two rows
-  if (unique(founders.dim.check[1,]) != 2)
-    stop("The number of entries in the 'founders' argument must be exactly 2.")
-
-
-  # Now make sure that the number of markers is the same between finals,
-  # founders, and genotypes in the cross object
-  if (!all.equal(founders.dim.check[2,], cross.dim.check[2,]))
-    stop("The number of markers in the 'founders' and 'finals' arguments is
-         not the same as in the 'cross' object genotype data.")
-
-  # Make sure the finals and cross geno data have the same dimension
-  if (!identical(finals.dim.check, cross.dim.check))
-    stop("The 'finals' argument does not have the same dimensions as the genotype
-         data in the 'cross' argument.")
-
-
-  # Check the founders and finals matrices for correct formatting
-  founder.elements <- unlist(founders) %>%
-    unique()
-  final.elements <- unlist(finals) %>%
-    unique()
-
-  if (!founder.elements %in% c(0, 1, 2, NA))
-    stop("The elements of the 'founders' argument must be in the set z {0, 1, 2, NA}.")
-
-  if (!final.elements %in% c(0, 1, 2, NA))
-    stop("The elements of the 'finals' argument must be in the set z {0, 1, 2, NA}.")
-
-
   # Check to make sure the prob.threshold is between 0 and 1
   if (prob.threshold < 0 | prob.threshold > 1)
     stop("The argument 'prob.threshold' must be between 0 and 1.")
 
-
-
+  # Check to see if the type is a correct input
+  if (!type %in% c("discrete", "continuous"))
+    stop("The argument 'type' must be 'discrete' or 'continuous.'")
 
 
   ## First step to is to calculate conditional genotype probabilities
@@ -108,7 +65,7 @@ fsimpute <- function(cross, founders, finals, prob.threshold = 0.7, step = 0,
   # Extract the probabilities
   probs <- lapply(X = cross.probs$geno, FUN = function(chr) chr$prob)
 
-  # Find the most likely genotype, given the threshold
+  # Find the most likely parental genotype, given the threshold
   finals.likely <- lapply(X = probs, FUN = function(chr)
     # Apply over rows and columns of the array (i.e. look down the 3rd dimension)
     apply(X = chr, MARGIN = c(1,2), FUN = function(geno)
@@ -118,76 +75,65 @@ fsimpute <- function(cross, founders, finals, prob.threshold = 0.7, step = 0,
   ## Once likely final genotypes are determined, the next step is to impute
   ## the founder genotypes For each founder, assess the progeny to find the the
   ## genotype that most likely originated from the founder
+  founders.imputed <- list(cross$geno, finals.likely) %>%
+    pmap(function(cross.chr, fl.chr) {
 
-  founders.imputed <-
-    mapply(founders, finals.likely, finals, FUN = function(fo.chr, fl.chr, fi.chr) {
+      # Extract the original final genotypes
+      fi.chr <- cross.chr$finals
 
-      # Iterate over the number of markers
-      for (i in seq_len(ncol(fo.chr))) {
+      # Apply a function over the markers
+      founders.likely <- sapply(X = seq_len(ncol(fi.chr)), FUN = function(i)
 
-        # Identify which founder is missing
-        missing.founder <- which(is.na(fo.chr[,i]))
-
-        # Are there missing founder? if not, skip
-        if (length(missing.founder) < 1)
-          next
-
-        # Get the recoded founder identifier (i.e. 1 or 3)
-        missing.founder.id <- c(1,3)[missing.founder]
-
-        # Apply a function over the vector of missing founders
-        founders.likely <- sapply(X = missing.founder.id, FUN = function(fou) {
-
+        # Identify the index of progeny inheriting each parental allele
+        sapply(X = c(1,3), FUN = function(fou) {
           # Identify the index of progeny inheriting that founder allele
           finals.ind <- fl.chr[,i] == fou
-
           # Count the alleles inherited from that parent
           tabl <- fi.chr[finals.ind,i] %>%
             table()
-
           # Assign the most frequent genotype
           freq.genotype <- which.max(tabl) %>%
             names() %>%
             as.numeric()
-
           # The length may be zero, if so assign NA
           if (length(freq.genotype) == 0) {
             return(NA)
 
           } else {
             return(freq.genotype)
-          } })
+          } }) )
 
-        fo.chr[missing.founder,i] <- founders.likely
-
-      }
-
-      return(list(fo.chr)) })
+      # Add column names
+      colnames(founders.likely) <- colnames(fi.chr)
+      return(founders.likely) })
 
   ## Once founders are imputed to a higher density, we can use that information
   ## to impute the finals
-  finals.imputed <- mapply(founders.imputed, finals.likely, FUN = function(fi.chr, fl.chr) {
+  finals.imputed <- list(founders.imputed, finals.likely) %>%
+    pmap(function(fou.imp.chr, fi.chr) {
 
-    # Iterate over the number of markers
-    for (i in seq_len(ncol(fi.chr))) {
+      # Combine matricies
+      chr <- rbind(fou.imp.chr, fi.chr)
 
-      # Extract parent genos
-      pars <- fi.chr[,i]
+      # Apply a function over the markers
+      apply(X = chr, MARGIN = 2, FUN = function(snp) {
 
-      # Extract final genos
-      fin <- fl.chr[,i]
+        # The parents are the first two
+        fou <- snp[1:2]
+        # The finals are the remaining
+        fin <- snp[-1:-2]
 
-      # Impute using founder genotypes - make sure NAs are not included
-      fin[fin == 1 & !is.na(fin)] <- pars[1]
-      fin[fin == 2 & !is.na(fin)] <- 1
-      fin[fin == 3 & !is.na(fin)] <- pars[2]
+        # If the founders are identical, the het is homozygous for the founder
+        if (length(unique(fou)) == 1 ) {
+          het <- fou[1]
+        } else {
+          het <- 1
+        }
 
-      # Add back to matrix
-      fl.chr[,i] <- fin
-
-    }
-
-    return(list(fl.chr)) })
+        # Impute using founder genotypes - make sure NAs are not included
+        ifelse(test = fin == 1, yes = fou[1],
+                      no = ifelse(test = fin == 2, yes = het,
+                                  no = ifelse(test = fin == 3, yes = fou[2], no = NA))) }) })
 
 
   ## Run some stats

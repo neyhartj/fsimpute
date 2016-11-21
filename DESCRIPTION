@@ -1,6 +1,6 @@
 Package: fsimpute
-Title: An R package for imputing data from genotyping-by-sequencing experiments
-    in bi-parental populations of finite generations of selfing
+Title: An R package for imputing genotype data in bi-parental populations of 
+    finite generations of selfing
 Version: 0.0.0.9000
 Authors@R: person("Jeff", "Neyhart", email = "neyhartje@gmail.com", role = c("aut", "cre"))
 Description: Uses infrastructure present in the R/qtl package and methods from
@@ -16,6 +16,7 @@ Suggests:
     rmarkdown,
     simcross
 Imports:
-    qtl
+    qtl,
+    purrr
 VignetteBuilder: knitr
 RoxygenNote: 5.0.1
