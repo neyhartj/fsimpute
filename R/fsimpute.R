@@ -33,6 +33,7 @@
 #'
 #' @import qtl
 #' @import purrr
+#' @import tidyr
 #'
 #' @export
 #'
@@ -55,6 +56,12 @@ fsimpute <- function(cross, prob.threshold = 0.7, type = "discrete", step = 0, o
   if (!type %in% c("discrete", "continuous"))
     stop("The argument 'type' must be 'discrete' or 'continuous.'")
 
+  # Grab the founder and final names
+  founder.names <- cross$geno$`1`$founders %>%
+    row.names()
+  final.names <- cross$geno$`1`$finals %>%
+    row.names()
+
 
   ## First step to is to calculate conditional genotype probabilities
 
@@ -64,47 +71,74 @@ fsimpute <- function(cross, prob.threshold = 0.7, type = "discrete", step = 0, o
 
   # Extract the probabilities
   probs <- lapply(X = cross.probs$geno, FUN = function(chr) chr$prob)
-
-  # Find the most likely parental genotype, given the threshold
-  finals.likely <- lapply(X = probs, FUN = function(chr)
-    # Apply over rows and columns of the array (i.e. look down the 3rd dimension)
-    apply(X = chr, MARGIN = c(1,2), FUN = function(geno)
-      ifelse(max(geno) >= prob.threshold, which.max(geno), NA) ))
+  
+  finals.likely <- probs %>%
+    map(function(chr) {
+      
+      # Create a list from the array - separates into the number of individuals
+      array_tree(chr, margin = c(1,2)) %>%
+        map(function(indiv) {
+          # Determine the most likely parental state
+          map_dbl(indiv, function(prob) ifelse(max(prob) >= prob.threshold, which.max(prob), NA))
+        }) %>%
+        do.call("rbind", .) })
 
 
   ## Once likely final genotypes are determined, the next step is to impute
-  ## the founder genotypes For each founder, assess the progeny to find the the
+  ## the founder genotypes.
+  ## For each founder, assess the progeny to find the the
   ## genotype that most likely originated from the founder
   founders.imputed <- list(cross$geno, finals.likely) %>%
     pmap(function(cross.chr, fl.chr) {
 
       # Extract the original final genotypes
       fi.chr <- cross.chr$finals
+      # Extract the original founder genotypes
+      fou.chr <- cross.chr$founders
+      # Combine the original genotypes
+      orig.chr <- rbind(fou.chr, fi.chr)
+      
+      # Total number of individuals
+      nInd <- nrow(orig.chr)
+      
+      # Combine a matrix of parent states and the likely parent states in the finals
+      state.chr <- rbind(
+        matrix(data = c(1,3), nrow = 2, ncol = ncol(orig.chr)),
+        fl.chr
+      )
+      
+      # Combine the original and the state matrices
+      founders.likely <- rbind(state.chr, orig.chr) %>%
+        # Apply a function over the markers
+        apply(MARGIN = 2, FUN = function(snp) {
+          
+          # Separate the orig and state
+          state <- snp[seq_len(nInd)]
+          orig <- snp[-seq_len(nInd)]
+          
+          # Audit the progeny for those inheriting each parental state
+          fou.likely <- list(state[1:2]) %>%
+            pmap_dbl(function(par) {
+              
+              # Find the index of progeny inheriting that parental state
+              finals.ind <- which(state[-1:-2] == par)
+              # Which observed genotype most frequently corresponds to that state?
+              tabl <- table(orig[-1:-2][finals.ind])
+              most.freq <- which.max(tabl) %>%
+                names() %>% as.numeric()
+              
+              ifelse(length(most.freq) == 0, NA, most.freq) }) %>%
+            
+            # Convert to matrix
+            as.matrix()
+          
+          # Is one of the likely founders NA and are all of the likely finals not NA?
+          ifelse( sum(is.na(fou.likely)) == 1 & sum(is.na(state[-1:-2])) == 0,
+                yes = return(rep(na.omit(fou.likely), 2)), no = return(fou.likely) ) })
 
-      # Apply a function over the markers
-      founders.likely <- sapply(X = seq_len(ncol(fi.chr)), FUN = function(i)
 
-        # Identify the index of progeny inheriting each parental allele
-        sapply(X = c(1,3), FUN = function(fou) {
-          # Identify the index of progeny inheriting that founder allele
-          finals.ind <- fl.chr[,i] == fou
-          # Count the alleles inherited from that parent
-          tabl <- fi.chr[finals.ind,i] %>%
-            table()
-          # Assign the most frequent genotype
-          freq.genotype <- which.max(tabl) %>%
-            names() %>%
-            as.numeric()
-          # The length may be zero, if so assign NA
-          if (length(freq.genotype) == 0) {
-            return(NA)
-
-          } else {
-            return(freq.genotype)
-          } }) )
-
-      # Add column names
-      colnames(founders.likely) <- colnames(fi.chr)
+      # Add column and row names
+      dimnames(founders.likely) <- dimnames(fou.chr)
       return(founders.likely) })
 
   ## Once founders are imputed to a higher density, we can use that information
@@ -116,7 +150,7 @@ fsimpute <- function(cross, prob.threshold = 0.7, type = "discrete", step = 0, o
       chr <- rbind(fou.imp.chr, fi.chr)
 
       # Apply a function over the markers
-      apply(X = chr, MARGIN = 2, FUN = function(snp) {
+      chr.new <- apply(X = chr, MARGIN = 2, FUN = function(snp) {
 
         # The parents are the first two
         fou <- snp[1:2]
@@ -133,23 +167,34 @@ fsimpute <- function(cross, prob.threshold = 0.7, type = "discrete", step = 0, o
         # Impute using founder genotypes - make sure NAs are not included
         ifelse(test = fin == 1, yes = fou[1],
                       no = ifelse(test = fin == 2, yes = het,
-                                  no = ifelse(test = fin == 3, yes = fou[2], no = NA))) }) })
+                                  no = ifelse(test = fin == 3, yes = fou[2], no = NA))) })
 
-
-  ## Run some stats
-  # Calculate missingness proportion
-  finals.missing <- sapply(X = finals.imputed, FUN = function(chr) mean(is.na(chr)))
-  finals.missing["mean"] = mean(finals.missing)
-
-  founders.missing <- sapply(X = founders.imputed, FUN = function(chr) mean(is.na(chr)))
-  founders.missing["mean"] = mean(founders.missing)
-
+      # Add row names back
+      row.names(chr.new) <- final.names
+      return(chr.new) })
+  
   # Add the imputed data back to the cross object
-  cross$imputed <- list(
-    stats = list(missingness = rbind(founders.missing, finals.missing)),
-    founders = founders.imputed,
-    finals = finals.imputed
-  )
+  cross$geno <- mapply(founders.imputed, finals.imputed, cross$geno, FUN = function(fou.chr, fi.chr, chr) {
+    chr$founders_imputed <- fou.chr
+    chr$finals_imputed <- fi.chr
+    return(list(chr)) })
+    
+  ## Run some stats
+  # Calculate missingness beforehand
+  missing <- cross$geno %>%
+    map_df(function(chr) {
+      # Calculate overall missingness proportion for finals and founders simultaneously
+      chr[c("founders", "finals", "founders_imputed", "finals_imputed")] %>%
+        map_dbl(function(genos) mean(is.na(genos)) ) }) %>%
+    mutate(group = rep(c("founders", "finals"), 2),
+           type = rep(c("pre_imputation", "post_imputation"), each = 2 )) %>%
+    gather(chrom, missingness, -group, -type) %>%
+    spread(type, missingness) %>%
+    select(group, chrom, pre_imputation, post_imputation) %>%
+    arrange(chrom)
+    
+  # Add it back in to the cross object
+  cross$missingness_stats <- missing
 
   return(cross)
 

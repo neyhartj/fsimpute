@@ -17,6 +17,7 @@ Suggests:
     simcross
 Imports:
     qtl,
-    purrr
+    purrr,
+    tidyr
 VignetteBuilder: knitr
 RoxygenNote: 5.0.1

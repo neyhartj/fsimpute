@@ -113,14 +113,10 @@ prep_cross <- function(map, founders, finals, selfing.gen) {
       # Apply over markers
       apply(X = chr, MARGIN = 2, FUN = function(snp) {
 
-        # If one or both parents are missing, or both are the same, it is ambiguous
-        if (any(is.na(snp)) | length(unique(snp)) == 1) {
-          return(c(NA, NA))
-
-          # If both parents are non-missing and different, it's good
-        } else {
-          return(snp)
-        }}) })
+        # If one or both parents are missing, both are the same, or one is het,
+        # it is ambiguous
+        ifelse( any(is.na(snp)) | length(unique(snp)) == 1 | any(snp == 1),
+                return(c(NA, NA)), return(snp) ) }) })
 
   # Find the index of ambigous markers on each chromosome
   amb.markers <- founders.unamb %>%
