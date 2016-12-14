@@ -57,7 +57,7 @@ results <- design %>%
 
 # Break up the design into n.core even chunks
 results.split <- results %>%
-  split(seq(n.cores))
+  split(cut(x = seq(nrow(.)), breaks = n.cores))
 
 ## Run the simulations
 
