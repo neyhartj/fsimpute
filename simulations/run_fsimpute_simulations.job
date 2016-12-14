@@ -1,0 +1,17 @@
+#!/bin/bash
+
+#PBS -l walltime=12:00:00,mem=24gb,nodes=1:ppn=16
+#PBS -N fsimpute_simulations
+#PBS -M neyha001@umn.edu
+#PBS -m abe
+#PBS -r n
+
+# Change the working directory
+cd /home/smithkp/neyhartj/GBS/fsimpute/simulations
+
+module load R/3.3.1
+
+
+## Run the regular simulation
+
+Rscript de_novo_simulations.R
