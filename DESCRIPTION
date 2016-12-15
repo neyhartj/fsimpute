@@ -5,16 +5,15 @@ Version: 0.0.0.9000
 Authors@R: person("Jeff", "Neyhart", email = "neyhartje@gmail.com", role = c("aut", "cre"))
 Description: Uses infrastructure present in the R/qtl package and methods from
     the R/mpMap package to perform genotype imputation in bi-parental populations
-    that have gone through a finite number of selfing generations.
+    of partially inbred individuals
 Depends:
     R (>= 3.3.1)
-License: MIT
+License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Suggests:
     knitr,
-    rmarkdown,
-    simcross
+    rmarkdown
 Imports:
     qtl,
     purrr,
