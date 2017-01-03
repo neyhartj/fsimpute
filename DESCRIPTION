@@ -1,11 +1,10 @@
 Package: fsimpute
-Title: An R package for imputing genotype data in bi-parental populations of 
-    finite generations of selfing
+Title: Imputing genotype data in bi-parental populations of finite selfing
 Version: 0.0.0.9000
 Authors@R: person("Jeff", "Neyhart", email = "neyhartje@gmail.com", role = c("aut", "cre"))
-Description: Uses infrastructure present in the R/qtl package and methods from
-    the R/mpMap package to perform genotype imputation in bi-parental populations
-    of partially inbred individuals
+Description: Uses infrastructure present in the qtl package and methods from
+    the mpMap package to perform genotype imputation in bi-parental populations
+    of individuals of finite generations of selfing.
 Depends:
     R (>= 3.3.1)
 License: MIT + file LICENSE

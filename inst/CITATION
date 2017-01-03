@@ -1,0 +1,13 @@
+citHeader("To cite fsimpute in publications use:")
+
+citEntry(entry = "Manual",
+  title        = "R package {fsimpute}: Imputing genotype data in bi-parental populations of finite selfing",
+  author       = personList(as.person("Jeff Neyhart")),
+  year         = "2016",
+  note         = "R package version 0.1.0",
+
+  textVersion  =
+  paste("Jeff Neyhart (2016).",
+        "R package fsimpute: Imputing genotype data in bi-parental populations of finite selfing.",
+        "R package version 0.1.0.")
+)
